@@ -1,0 +1,14 @@
+[tools]
+go = "1.26.10"
+zig = "0.17.1"
+
+[env]
+GOTOOLCHAIN = "local"
+
+[tasks.build]
+description = "build a static pummel binary with zig cc"
+run = "./build.sh"
+
+[tasks.test]
+description = "vet and test"
+run = "go vet ./... && go test ./..."
