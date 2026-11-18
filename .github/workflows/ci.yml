@@ -1,0 +1,25 @@
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install zig
+        run: |
+          curl -fsSL https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.17.1" >> "$GITHUB_PATH"
+      - run: go vet ./...
+        env:
+          CGO_ENABLED: "1"
+          CC: zig cc -target x86_64-linux-musl
+      - run: go test ./...
+        env:
+          CGO_ENABLED: "1"
+          CC: zig cc -target x86_64-linux-musl

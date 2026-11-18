@@ -1,0 +1,71 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build-linux-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install zig
+        run: |
+          curl -fsSL https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.17.1" >> "$GITHUB_PATH"
+      - name: build
+        run: |
+          set -eu
+          build() {
+            CGO_ENABLED=1 CC="zig cc -target $1" GOOS=$2 GOARCH=$3 \
+              go build -trimpath -ldflags "-s -w" -o "pummel-$2-$3$4" .
+          }
+          build x86_64-linux-musl linux amd64 ""
+          build aarch64-linux-musl linux arm64 ""
+          build x86_64-windows-gnu windows amd64 ".exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins-linux-windows
+          path: pummel-*
+          if-no-files-found: error
+  build-darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build
+        run: |
+          set -eu
+          build() {
+            CGO_ENABLED=1 CC="clang -arch $1" GOOS=darwin GOARCH=$1 \
+              go build -trimpath -ldflags "-s -w" -o "pummel-darwin-$1" .
+          }
+          build arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins-darwin
+          path: pummel-*
+          if-no-files-found: error
+  release:
+    needs: [build-linux-windows, build-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cd dist
+          sha256sum pummel-* > checksums.txt
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" -R nitpum/pummel --title "pummel $tag" --generate-notes pummel-* checksums.txt \
+            || gh release upload "$tag" -R nitpum/pummel --clobber pummel-* checksums.txt
