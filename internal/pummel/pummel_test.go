@@ -139,3 +139,30 @@ func TestCommentLength(t *testing.T) {
 		t.Fatalf("findings = %d, want 1", got)
 	}
 }
+
+func TestEncodeFindingsTOON(t *testing.T) {
+	if got := EncodeFindings(nil); got != "[]" {
+		t.Fatalf("empty = %q, want []", got)
+	}
+	fs := []Finding{
+		{File: "src/app.ts", Line: 12, Rule: "comment-prefix", Severity: "warn", Message: "comment must start with TODO:, NOTE:, or FIXME:"},
+		{File: "weird.php", Line: 3, Rule: "ticket-ref", Severity: "warn", Message: "has \"quotes\", commas,\nand a tab\t"},
+	}
+	got := EncodeFindings(fs)
+	want := "[2]{file,line,rule,severity,message}:\n" +
+		"src/app.ts,12,comment-prefix,warn,\"comment must start with TODO:, NOTE:, or FIXME:\"\n" +
+		"weird.php,3,ticket-ref,warn,\"has \\\"quotes\\\", commas,\\nand a tab\\t\""
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	for _, s := range []string{"123", "true", "-x", "#c", " padded", "a:b"} {
+		if !toonNeedsQuote(s) {
+			t.Errorf("toonNeedsQuote(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"warn", "src/app.ts", "hello world"} {
+		if toonNeedsQuote(s) {
+			t.Errorf("toonNeedsQuote(%q) = true, want false", s)
+		}
+	}
+}

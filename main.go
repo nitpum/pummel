@@ -35,6 +35,7 @@ func main() {
 func run(args []string) int {
 	fs := flag.NewFlagSet("pummel", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "JSON output (for agents)")
+	toonOut := fs.Bool("toon", false, "TOON output (token-efficient, toonformat.dev)")
 	diffMode := fs.Bool("diff", false, "review only lines changed vs --base (git)")
 	base := fs.String("base", "HEAD", "git ref to diff against (with --diff)")
 	disable := fs.String("disable", "", "comma-separated rule IDs to skip")
@@ -124,7 +125,9 @@ func run(args []string) int {
 		return findings[i].Line < findings[j].Line
 	})
 
-	if *jsonOut {
+	if *toonOut {
+		fmt.Println(pummel.EncodeFindings(findings))
+	} else if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(findings); err != nil {
@@ -164,6 +167,7 @@ usage:
 
 flags:
   --json          machine-readable output for agents
+  --toon          token-efficient output for agents (toonformat.dev)
   --base REF      git ref for --diff (default HEAD)
   --disable IDS   skip rules, e.g. --disable magic-number,verb-first
   --list-rules    list rule IDs
