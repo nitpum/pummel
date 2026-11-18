@@ -263,7 +263,7 @@ func astJSComments(s *Source) []Comment {
 	return comments
 }
 
-func astJSMagicNumbers(s *Source) []Finding {
+func astJSMagicNumbers(s *Source, isConfig bool) []Finding {
 	var out []Finding
 	for _, caps := range runQuery(grammarKind(s.Path, s.Lang), jsNumberQuerySrc, s.AST) {
 		n := caps[0]
@@ -276,7 +276,7 @@ func astJSMagicNumbers(s *Source) []Finding {
 		for parent != nil && isNumericWrapper(parent) {
 			value, parent = parent, parent.Parent()
 		}
-		if parent != nil && isNamedOrIndexValue(parent, value) {
+		if parent != nil && isExemptNumericValue(parent, value, isConfig) {
 			continue
 		}
 		literal := string(s.AST.Src[value.StartByte():value.EndByte()])
@@ -296,7 +296,7 @@ func isNumericWrapper(node *sitter.Node) bool {
 	return false
 }
 
-func isNamedOrIndexValue(parent, value *sitter.Node) bool {
+func isExemptNumericValue(parent, value *sitter.Node, isConfig bool) bool {
 	switch parent.Kind() {
 	case "variable_declarator":
 		declaration := parent.Parent()
@@ -308,6 +308,12 @@ func isNamedOrIndexValue(parent, value *sitter.Node) bool {
 			isFieldNode(parent, "value", value)
 	case "enum_assignment":
 		return isFieldNode(parent, "value", value)
+	case "pair":
+		if !isConfig || !isFieldNode(parent, "value", value) {
+			return false
+		}
+		key := parent.ChildByFieldName("key")
+		return key != nil && (key.Kind() == "property_identifier" || key.Kind() == "string")
 	case "subscript_expression":
 		return isFieldNode(parent, "index", value)
 	case "literal_type":

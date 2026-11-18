@@ -38,6 +38,14 @@ func DetectLang(path string) Lang {
 	return LangNone
 }
 
+func isJSConfigFile(path string) bool {
+	path = strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	dir, base := filepath.Split(path)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	return stem == "config" || strings.HasSuffix(stem, ".config") ||
+		strings.Contains("/"+dir, "/config/")
+}
+
 func IsTestFile(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
 	switch DetectLang(path) {

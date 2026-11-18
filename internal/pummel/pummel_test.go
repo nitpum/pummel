@@ -86,10 +86,39 @@ func TestVerbFirst(t *testing.T) {
 func TestVerbFirstAcceptsWordsThatCanAlsoBeNouns(t *testing.T) {
 	src := "function listUsers() {}\nfunction mapSales() {}\nfunction countItems() {}\n" +
 		"function queryOrders() {}\nfunction logPayment() {}\nfunction sumTotals() {}\n" +
-		"function totalAmount() {}\nfunction frobnicate() {}\n"
+		"function totalAmount() {}\nfunction frobnicate() {}\nfunction setTenders() {}\n"
 	findings := runRule(t, "verb-first", "a.ts", src)
 	if len(findings) != 1 || findings[0].Line != 7 {
 		t.Fatalf("findings = %+v, want only totalAmount", findings)
+	}
+}
+
+func TestMagicNumberExemptsDirectNamedConfigProperties(t *testing.T) {
+	src := `const defaults = {
+  testTimeout: 60000,
+  sftp: { defaultPort: 2222 },
+  timeout: wait(5000),
+  precision: 4 * 5,
+  delay: 4000
+    + 6000,
+  lastValue: 7000
+};
+`
+	for _, path := range []string{"tool.config.cjs", "src/config/service.ts", "config.ts", "src/service.ts", "src/configuration/service.ts"} {
+		want := []int{4, 5, 5, 6, 7}
+		if path == "src/service.ts" || path == "src/configuration/service.ts" {
+			want = []int{2, 3, 4, 5, 5, 6, 7, 8}
+		}
+		findings := runRule(t, "magic-number", path, src)
+		if len(findings) != len(want) {
+			t.Errorf("%s findings = %+v, want lines %v", path, findings, want)
+			continue
+		}
+		for i, f := range findings {
+			if f.Line != want[i] {
+				t.Errorf("%s finding = %+v, want line %d", path, f, want[i])
+			}
+		}
 	}
 }
 

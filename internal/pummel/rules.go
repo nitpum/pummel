@@ -75,7 +75,7 @@ var AllRules = []Rule{
 		}
 		return regexVerbFirst(s)
 	}},
-	{ID: "magic-number", Description: "name numeric literals (skips tests, fixtures, mocks, and seeds)", Langs: "js/ts, go, php", Fn: magicNumberRule},
+	{ID: "magic-number", Description: "name numeric literals (exempts named config values and test support data)", Langs: "js/ts, go, php", Fn: magicNumberRule},
 	{ID: "relative-import", Description: "prefer a configured alias over ../ imports", Langs: "js/ts", Fn: func(s *Source) []Finding {
 		if s.AST != nil {
 			return astRelativeImport(s)
@@ -252,6 +252,8 @@ var numRe = regexp.MustCompile(`0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?
 
 var jstsConstRe = regexp.MustCompile(`(?:^|[;{])\s*(?:export\s+)?const\s+[A-Za-z_$][\w$]*\s*(?::[^=;]+)?=\s*[+-]?\s*$`)
 var jstsConstEnd = regexp.MustCompile(`^\s*(?:;|$)`)
+var jstsConfigPropertyRe = regexp.MustCompile(`(?:^|[{,])\s*[A-Za-z_$][\w$]*\s*:\s*[+-]?\s*$`)
+var jstsConfigPropertyEnd = regexp.MustCompile(`^\s*[,}]`)
 var phpDefineRe = regexp.MustCompile(`^\s*define\s*\(`)
 
 func isWordByte(b byte) bool {
@@ -294,8 +296,9 @@ func magicNumberRule(s *Source) []Finding {
 	if s.IsTest {
 		return nil
 	}
+	isConfig := s.Lang == LangJSTS && isJSConfigFile(s.ActualPath)
 	if s.Lang == LangJSTS && s.AST != nil {
-		return astJSMagicNumbers(s)
+		return astJSMagicNumbers(s, isConfig)
 	}
 	var out []Finding
 	inConstBlock := false
@@ -340,10 +343,28 @@ func magicNumberRule(s *Source) []Finding {
 			if s.Lang == LangJSTS && jstsConstRe.MatchString(line[:m[0]]) && jstsConstEnd.MatchString(line[m[1]:]) {
 				continue
 			}
+			if isConfig && isDirectConfigProperty(s.MaskedLines, i, m[0], m[1]) {
+				continue
+			}
 			out = append(out, magicNumberFinding(s, i+1, line[m[0]:m[1]]))
 		}
 	}
 	return out
+}
+
+func isDirectConfigProperty(lines []string, row, start, end int) bool {
+	if !jstsConfigPropertyRe.MatchString(lines[row][:start]) {
+		return false
+	}
+	if tail := strings.TrimSpace(lines[row][end:]); tail != "" {
+		return jstsConfigPropertyEnd.MatchString(tail)
+	}
+	for _, line := range lines[row+1:] {
+		if tail := strings.TrimSpace(line); tail != "" {
+			return jstsConfigPropertyEnd.MatchString(tail)
+		}
+	}
+	return false
 }
 
 func magicNumberFinding(s *Source, line int, literal string) Finding {
