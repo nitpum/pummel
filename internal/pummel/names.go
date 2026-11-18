@@ -30,12 +30,32 @@ var reactAllow = map[string]bool{
 
 var goAllow = map[string]bool{"main": true, "init": true, "String": true, "Error": true}
 
+const verbList = `
+activate add append apply assert assign attach authenticate begin bind build calculate call can
+cancel capitalize capture change check choose clamp classify clear clone close collapse collect
+combine compare compile compose compress compute concat connect convert copy count create
+deactivate debounce decode decompress decrement decrypt define delay delete derive detach detect
+disable dispatch display divide does edit emit enable encode encrypt ensure escape exec execute
+expand export extract fetch filter find flatten flush force format freeze generate get group
+guess handle has hash hide identify increment infer init initialize inject insert invoke is join
+list listen load lock log lowercase make map mask match memoize merge minify mount move multiply
+navigate normalize notify observe omit open pad pair parse patch pause pick pop preload prepend
+preprocess produce push query randomize read redirect reduce refresh register remove render
+replace reset resize resolve restrict retrieve retry round run sanitize save scaffold schedule
+scroll search select separate serialize set setup share shift should show shuffle skip sleep
+slugify sort split start stop store stringify strip subscribe subtract sum swap sync test
+throttle to toggle track transform translate trigger trim truncate unbind unescape unlock
+unmount unregister unsubscribe unwrap update uppercase upsert use validate verify wait warn
+watch will wrap write
+`
+
+var verbWords = map[string]bool{}
 var nounWords = map[string]bool{}
 
 var nounList = []string{
 	"user", "users", "data", "config", "info", "result", "results", "helper",
 	"helpers", "util", "utils", "utility", "string", "str", "number", "num",
-	"array", "arr", "list", "map", "dict", "set", "item", "items", "value",
+	"array", "arr", "list", "map", "dict", "item", "items", "value",
 	"values", "key", "keys", "entry", "entries", "temp", "tmp", "buf",
 	"buffer", "byte", "bytes", "char", "bool", "boolean", "int", "float",
 	"double", "response", "resp", "request", "req", "header", "headers",
@@ -64,6 +84,9 @@ var nounList = []string{
 }
 
 func init() {
+	for _, word := range strings.Fields(verbList) {
+		verbWords[word] = true
+	}
 	for _, w := range nounList {
 		nounWords[w] = true
 	}
@@ -152,6 +175,11 @@ func firstToken(name string) string {
 	return strings.ToLower(parts[0])
 }
 
+func hasNounPrefix(name string) bool {
+	word := firstToken(name)
+	return nounWords[word] && !verbWords[word]
+}
+
 func regexVerbFirst(s *Source) []Finding {
 	var out []Finding
 	for i, line := range s.MaskedLines {
@@ -159,7 +187,7 @@ func regexVerbFirst(s *Source) []Finding {
 		if name == "" || skipFuncName(s.Lang, name) {
 			continue
 		}
-		if nounWords[firstToken(name)] {
+		if hasNounPrefix(name) {
 			out = append(out, mk(s.Path, i+1, "verb-first", "warn",
 				fmt.Sprintf("function %q should start with a verb (e.g. fetch%s / load%s)", name, upFirst(name), upFirst(name))))
 		}

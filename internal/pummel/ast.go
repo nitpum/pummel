@@ -3,6 +3,7 @@
 package pummel
 
 import (
+	"bytes"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,7 @@ const (
 (import_statement source: (string (string_fragment) @path))
 (export_statement source: (string (string_fragment) @path))
 (call_expression function: (identifier) @fn arguments: (arguments . (string (string_fragment) @path)))
+(call_expression function: (import) arguments: (arguments . (string (string_fragment) @path)))
 `
 	goFnQuerySrc = `
 (function_declaration name: (identifier) @fn)
@@ -150,6 +152,9 @@ type nodeText struct {
 	line int
 }
 
+const jsCommentQuerySrc = "(comment) @comment"
+const jsNumberQuerySrc = "(number) @number"
+
 func runQuery(kind gkind, querySrc string, ast *AST) [][]nodeText {
 	q := getQuery(kind, querySrc)
 	if q == nil {
@@ -200,7 +205,7 @@ func astVerbFirst(s *Source) []Finding {
 			if name == "" || skipFuncName(s.Lang, name) {
 				continue
 			}
-			if nounWords[firstToken(name)] {
+			if hasNounPrefix(name) {
 				out = append(out, mk(s.Path, c.line, "verb-first", "warn",
 					fmt.Sprintf("function %q should start with a verb (e.g. fetch%s / load%s)", name, upFirst(name), upFirst(name))))
 			}
@@ -235,10 +240,83 @@ func astRelativeImport(s *Source) []Finding {
 		if !havePath {
 			continue
 		}
-		if strings.HasPrefix(path.text, "../") {
-			out = append(out, mk(s.Path, path.line, "relative-import", "warn",
-				fmt.Sprintf("relative import %q — prefer an absolute path (e.g. @/…)", path.text)))
-		}
+		out = appendRelativeImport(out, s, path.line, path.text)
 	}
 	return out
+}
+
+func astJSComments(s *Source) []Comment {
+	var comments []Comment
+	for _, caps := range runQuery(grammarKind(s.Path, s.Lang), jsCommentQuerySrc, s.AST) {
+		c := caps[0]
+		before := s.AST.Src[:c.node.StartByte()]
+		lineStart := bytes.LastIndexByte(before, '\n') + 1
+		text := strings.TrimPrefix(c.text, "//")
+		if strings.HasPrefix(c.text, "/*") {
+			text = cleanBlock(strings.TrimSuffix(c.text[2:], "*/"))
+		}
+		comments = append(comments, Comment{
+			Line: c.line, Text: strings.TrimSpace(text),
+			Whole: len(bytes.TrimSpace(before[lineStart:])) == 0,
+		})
+	}
+	return comments
+}
+
+func astJSMagicNumbers(s *Source) []Finding {
+	var out []Finding
+	for _, caps := range runQuery(grammarKind(s.Path, s.Lang), jsNumberQuerySrc, s.AST) {
+		n := caps[0]
+		switch n.text {
+		case "0", "1", "2":
+			continue
+		}
+		value := n.node
+		parent := value.Parent()
+		for parent != nil && isNumericWrapper(parent) {
+			value, parent = parent, parent.Parent()
+		}
+		if parent != nil && isNamedOrIndexValue(parent, value) {
+			continue
+		}
+		literal := string(s.AST.Src[value.StartByte():value.EndByte()])
+		out = append(out, magicNumberFinding(s, n.line, literal))
+	}
+	return out
+}
+
+func isNumericWrapper(node *sitter.Node) bool {
+	switch node.Kind() {
+	case "parenthesized_expression":
+		return true
+	case "unary_expression":
+		operator := node.ChildByFieldName("operator")
+		return operator != nil && (operator.Kind() == "+" || operator.Kind() == "-")
+	}
+	return false
+}
+
+func isNamedOrIndexValue(parent, value *sitter.Node) bool {
+	switch parent.Kind() {
+	case "variable_declarator":
+		declaration := parent.Parent()
+		if declaration == nil || declaration.Kind() != "lexical_declaration" {
+			return false
+		}
+		kind, name := declaration.ChildByFieldName("kind"), parent.ChildByFieldName("name")
+		return kind != nil && kind.Kind() == "const" && name != nil && name.Kind() == "identifier" &&
+			isFieldNode(parent, "value", value)
+	case "enum_assignment":
+		return isFieldNode(parent, "value", value)
+	case "subscript_expression":
+		return isFieldNode(parent, "index", value)
+	case "literal_type":
+		return true
+	}
+	return false
+}
+
+func isFieldNode(node *sitter.Node, field string, value *sitter.Node) bool {
+	child := node.ChildByFieldName(field)
+	return child != nil && child.Id() == value.Id()
 }

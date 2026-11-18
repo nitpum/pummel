@@ -106,7 +106,7 @@ func run(args []string) int {
 		if isBinary(content) {
 			continue
 		}
-		src := pummel.Load(t.display, content, pummel.IsTestFile(t.display))
+		src := pummel.LoadFile(t.display, t.actual, content, pummel.IsTestFile(t.actual))
 		fs := pummel.Run(src, disabled)
 		src.Close()
 		lines, limit := addedLines[t.display]

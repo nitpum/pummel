@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -19,13 +20,15 @@ type Finding struct {
 }
 
 type Source struct {
-	Path        string
-	Lang        Lang
-	Comments    []Comment
-	MaskedLines []string
-	RawLines    []string
-	IsTest      bool
-	AST         *AST
+	Path          string
+	ActualPath    string
+	Lang          Lang
+	Comments      []Comment
+	MaskedLines   []string
+	RawLines      []string
+	IsTest        bool
+	AST           *AST
+	importAliases func() aliases
 }
 
 func (s *Source) Close() {
@@ -40,17 +43,25 @@ type Rule struct {
 }
 
 func Load(path string, content []byte, isTest bool) *Source {
+	return LoadFile(path, path, content, isTest)
+}
+
+func LoadFile(path, actualPath string, content []byte, isTest bool) *Source {
 	lang := DetectLang(path)
-	res := scan(string(content), lang)
-	return &Source{
-		Path:        path,
-		Lang:        lang,
-		Comments:    res.Comments,
-		MaskedLines: strings.Split(res.Masked, "\n"),
-		RawLines:    strings.Split(string(content), "\n"),
-		IsTest:      isTest,
-		AST:         ParseAST(path, lang, content),
+	s := &Source{
+		Path: path, ActualPath: actualPath, Lang: lang, IsTest: isTest,
+		AST:           ParseAST(path, lang, content),
+		importAliases: sync.OnceValue(func() aliases { return findAliases(actualPath) }),
 	}
+	if lang == LangJSTS && s.AST != nil {
+		s.Comments = astJSComments(s)
+	} else {
+		res := scan(string(content), lang)
+		s.Comments = res.Comments
+		s.MaskedLines = strings.Split(res.Masked, "\n")
+		s.RawLines = strings.Split(string(content), "\n")
+	}
+	return s
 }
 
 var AllRules = []Rule{
@@ -64,8 +75,8 @@ var AllRules = []Rule{
 		}
 		return regexVerbFirst(s)
 	}},
-	{ID: "magic-number", Description: "numeric literals must be named constants (skips tests)", Langs: "js/ts, go, php", Fn: magicNumberRule},
-	{ID: "relative-import", Description: "no ../ relative import paths - prefer absolute (e.g. @/…)", Langs: "js/ts", Fn: func(s *Source) []Finding {
+	{ID: "magic-number", Description: "name numeric literals (skips tests, fixtures, mocks, and seeds)", Langs: "js/ts, go, php", Fn: magicNumberRule},
+	{ID: "relative-import", Description: "prefer a configured alias over ../ imports", Langs: "js/ts", Fn: func(s *Source) []Finding {
 		if s.AST != nil {
 			return astRelativeImport(s)
 		}
@@ -239,7 +250,8 @@ func commentedOutRule(s *Source) []Finding {
 
 var numRe = regexp.MustCompile(`0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?`)
 
-var jstsConstRe = regexp.MustCompile(`^\s*(?:export\s+)?const\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=`)
+var jstsConstRe = regexp.MustCompile(`(?:^|[;{])\s*(?:export\s+)?const\s+[A-Za-z_$][\w$]*\s*(?::[^=;]+)?=\s*[+-]?\s*$`)
+var jstsConstEnd = regexp.MustCompile(`^\s*(?:;|$)`)
 var phpDefineRe = regexp.MustCompile(`^\s*define\s*\(`)
 
 func isWordByte(b byte) bool {
@@ -282,6 +294,9 @@ func magicNumberRule(s *Source) []Finding {
 	if s.IsTest {
 		return nil
 	}
+	if s.Lang == LangJSTS && s.AST != nil {
+		return astJSMagicNumbers(s)
+	}
 	var out []Finding
 	inConstBlock := false
 	inEnumBlock := false
@@ -313,9 +328,6 @@ func magicNumberRule(s *Source) []Finding {
 				inEnumBlock = true
 				continue
 			}
-			if jstsConstRe.MatchString(line) {
-				continue
-			}
 		case LangPHP:
 			if phpDefineRe.MatchString(line) {
 				continue
@@ -325,14 +337,21 @@ func magicNumberRule(s *Source) []Finding {
 			if allowedNum(line, m[0], m[1]) {
 				continue
 			}
-			out = append(out, mk(s.Path, i+1, "magic-number", "warn",
-				fmt.Sprintf("magic number %s — define a named constant (e.g. const TIMEOUT_MS = %s)", line[m[0]:m[1]], line[m[0]:m[1]])))
+			if s.Lang == LangJSTS && jstsConstRe.MatchString(line[:m[0]]) && jstsConstEnd.MatchString(line[m[1]:]) {
+				continue
+			}
+			out = append(out, magicNumberFinding(s, i+1, line[m[0]:m[1]]))
 		}
 	}
 	return out
 }
 
-var relImportRe = regexp.MustCompile(`(?:from|import|require\(|import\(|export)[\s(]*['"](\.\./[^'"]*)['"]`)
+func magicNumberFinding(s *Source, line int, literal string) Finding {
+	return mk(s.Path, line, "magic-number", "warn",
+		fmt.Sprintf("magic number %s — give this value a name that describes its purpose", literal))
+}
+
+var relImportRe = regexp.MustCompile(`\b(from|import|require|export)[\s(]*['"](\.\./[^'"]*)['"]`)
 
 func regexRelativeImport(s *Source) []Finding {
 	if s.Lang != LangJSTS {
@@ -340,10 +359,10 @@ func regexRelativeImport(s *Source) []Finding {
 	}
 	var out []Finding
 	for i, line := range s.RawLines {
-		m := relImportRe.FindStringSubmatch(line)
-		if m != nil {
-			out = append(out, mk(s.Path, i+1, "relative-import", "warn",
-				fmt.Sprintf("relative import %q — prefer an absolute path (e.g. @/…)", m[1])))
+		for _, m := range relImportRe.FindAllStringSubmatchIndex(line, -1) {
+			if s.MaskedLines[i][m[2]:m[3]] == line[m[2]:m[3]] {
+				out = appendRelativeImport(out, s, i+1, line[m[4]:m[5]])
+			}
 		}
 	}
 	return out

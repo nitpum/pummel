@@ -1,6 +1,9 @@
 package pummel
 
-import "strings"
+import (
+	"bytes"
+	"strings"
+)
 
 type Comment struct {
 	Line  int
@@ -18,6 +21,7 @@ func scan(src string, lang Lang) ScanResult {
 	comments := []Comment{}
 	line := 1
 	sawCode := false
+	valueEnded := false
 	i := 0
 	n := len(src)
 
@@ -66,6 +70,18 @@ func scan(src string, lang Lang) ScanResult {
 				cb.Reset()
 				masked = append(masked, ' ', ' ')
 				i += 2
+			case c == '/' && lang == LangJSTS && !valueEnded && canStartRegex(masked):
+				end := findRegexEnd(src, i+1)
+				if end == i+1 {
+					masked = append(masked, c)
+					i++
+				} else {
+					valueEnded = true
+					for ; i < end; i++ {
+						masked = append(masked, ' ')
+					}
+				}
+				sawCode = true
 			case c == '"' || c == '\'' || (c == '`' && lang != LangPHP):
 				st = stStr
 				quote = c
@@ -79,6 +95,7 @@ func scan(src string, lang Lang) ScanResult {
 			default:
 				if c != ' ' && c != '\t' && c != '\r' {
 					sawCode = true
+					valueEnded = false
 				}
 				masked = append(masked, c)
 				i++
@@ -86,11 +103,17 @@ func scan(src string, lang Lang) ScanResult {
 		case stStr:
 			switch {
 			case c == '\\' && !(quote == '`' && lang == LangGo) && i+1 < n:
-				masked = append(masked, ' ', ' ')
+				if src[i+1] == '\n' {
+					masked = append(masked, ' ', '\n')
+					line++
+				} else {
+					masked = append(masked, ' ', ' ')
+				}
 				i += 2
 			case c == quote:
 				st = stCode
 				sawCode = true
+				valueEnded = true
 				masked = append(masked, ' ')
 				i++
 			case c == '\n':
@@ -141,6 +164,50 @@ func scan(src string, lang Lang) ScanResult {
 		comments = append(comments, Comment{Line: cLine, Text: cleanBlock(cb.String()), Whole: cWhole})
 	}
 	return ScanResult{Masked: string(masked), Comments: comments}
+}
+
+func canStartRegex(prefix []byte) bool {
+	end := len(bytes.TrimRight(prefix, " \t\r\n"))
+	if end == 0 || strings.ContainsRune("([{=,:;!?&|+-*%~^<>", rune(prefix[end-1])) {
+		return true
+	}
+	start := end
+	for start > 0 && isWordByte(prefix[start-1]) {
+		start--
+	}
+	switch string(prefix[start:end]) {
+	case "return", "throw", "case", "yield", "typeof", "void", "delete":
+		return start == 0 || prefix[start-1] != '.'
+	}
+	return false
+}
+
+func findRegexEnd(src string, start int) int {
+	inClass := false
+	for i := start; i < len(src); i++ {
+		switch src[i] {
+		case '\r', '\n':
+			return start
+		case '\\':
+			if i+1 < len(src) && (src[i+1] == '\r' || src[i+1] == '\n') {
+				return start
+			}
+			i++
+		case '[':
+			inClass = true
+		case ']':
+			inClass = false
+		case '/':
+			if !inClass {
+				i++
+				for i < len(src) && isWordByte(src[i]) {
+					i++
+				}
+				return i
+			}
+		}
+	}
+	return start
 }
 
 func cleanBlock(s string) string {

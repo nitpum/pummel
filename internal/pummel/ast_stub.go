@@ -11,3 +11,7 @@ func (a *AST) Close() {}
 func astVerbFirst(s *Source) []Finding { return nil }
 
 func astRelativeImport(s *Source) []Finding { return nil }
+
+func astJSComments(s *Source) []Comment { return nil }
+
+func astJSMagicNumbers(s *Source) []Finding { return nil }

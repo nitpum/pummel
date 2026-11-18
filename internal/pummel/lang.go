@@ -44,7 +44,27 @@ func IsTestFile(path string) bool {
 	case LangGo:
 		return strings.HasSuffix(base, "_test.go")
 	case LangJSTS:
-		return strings.Contains(base, ".test.") || strings.Contains(base, ".spec.")
+		if strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") {
+			return true
+		}
+		stem := strings.TrimSuffix(base, filepath.Ext(base))
+		for _, suffix := range []string{".fixture", ".mock", ".seed"} {
+			if strings.HasSuffix(stem, suffix) {
+				return true
+			}
+		}
+		dir := filepath.Dir(path)
+		for {
+			switch strings.ToLower(filepath.Base(dir)) {
+			case "test", "tests", "__tests__", "testdata", "fixtures", "__fixtures__", "mocks", "__mocks__", "seeds", "__seeds__":
+				return true
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
 	}
 	return false
 }
